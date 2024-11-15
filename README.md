@@ -1,10 +1,10 @@
 # COEN366-F24_P2P-Shopping v2 (Using Python)
 
 ## Introduction
-Welcome to the Peer-to-Peer Shopping System (P2S2) project! This project is part of the Communication Networks and Protocols course (COEN 366) at Concordia University. The goal of this project is to create a shopping system where users can buy and sell items through a server that facilitates communication between peers.
+Welcome to the Peer-to-Peer Shopping System project! This project is part of the Communication Networks and Protocols course (COEN 366) at Concordia University. The goal of this project is to create a shopping system where users can buy and sell items through a server that facilitates communication between peers.
 
 ## Project Overview
-The Peer-to-Peer Shopping System (P2S2) allows users to search for items and purchase them from other users. The system consists of several peers (users) and one server. Users can register with the server, search for items, and finalize purchases. The server acts as an intermediary, ensuring that users do not communicate directly with each other.
+The Peer-to-Peer Shopping System allows users to search for items and purchase them from other users. The system consists of several peers (users) and one server. Users can register with the server, search for items, and finalize purchases. The server acts as an intermediary, ensuring that users do not communicate directly with each other.
 
 ## Features
 - **User Registration and De-registration**: Users must register with the server to use the service. They can also de-register when they no longer wish to use the service.
