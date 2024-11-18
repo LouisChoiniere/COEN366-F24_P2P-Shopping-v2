@@ -11,7 +11,8 @@ class Client:
 
 def start_server():
     server_ip = "0.0.0.0"
-    server_port = 5000
+    udp_port = 5000
+    tcp_port = 5001
     buffer_size = 1024
     all_clients = {}
     active_searches = {}
@@ -23,7 +24,7 @@ def start_server():
         for client_key, client in all_clients.items():
             if client.name != requester_name:
                 search_message = f"SEARCH {rq} {item_name} {description}"
-                server_socket.sendto(search_message.encode(), (client.ip, int(client.udp_port)))
+                udp_socket.sendto(search_message.encode(), (client.ip, int(client.udp_port)))
                 print(f"Sent SEARCH to {client.name} at {client.ip}:{client.udp_port}")
                 num_sellers += 1
 
@@ -76,13 +77,13 @@ def start_server():
             # Send RESERVE to seller and FOUND to buyer
             seller_client = all_clients[seller_name]
             reserve_message = f"RESERVE {rq} {item_name} {price}"
-            server_socket.sendto(reserve_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
+            udp_socket.sendto(reserve_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
             print(f"Sent RESERVE to {seller_name} for item {item_name} at price {price}")
 
             # Notify the buyer about the availability
             buyer_client = all_clients[buyer_name]
             found_message = f"FOUND {rq} {item_name} {price}"
-            server_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
+            udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
             print(f"Sent FOUND to {buyer_name} for item {item_name} at price {price}")
 
             # Store reservation information
@@ -96,7 +97,7 @@ def start_server():
 
                 seller_client = all_clients[seller_name]
                 negotiate_message = f"NEGOTIATE {rq} {item_name} {max_price}"
-                server_socket.sendto(negotiate_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
+                udp_socket.sendto(negotiate_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
                 print(f"Sent NEGOTIATE to {seller_name} for item {item_name} at max price {max_price}")
 
     def process_offer(rq, offer_name, item_name, price):
@@ -119,7 +120,7 @@ def start_server():
 
                 # Send FOUND message to the buyer to confirm availability at max price
                 found_message = f"FOUND {rq} {item_name} {max_price}"
-                server_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
+                udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
                 print(f"Sent FOUND to {buyer_name} for item {item_name} at price {max_price}")
 
                 del active_searches[rq]
@@ -139,7 +140,7 @@ def start_server():
 
                 # Send NOT_FOUND message to the buyer
                 not_found_message = f"NOT_FOUND {rq} {item_name} {max_price}"
-                server_socket.sendto(not_found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
+                udp_socket.sendto(not_found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
                 print(f"Sent NOT_FOUND to {buyer_name} for item {item_name} at max price {max_price}")
 
                 del active_searches[rq]
@@ -158,7 +159,7 @@ def start_server():
                 # Send CANCEL message to the seller
                 cancel_message = f"CANCEL {rq} {search_info['item_name']} {search_info['reserved_price']}"
                 seller_client = all_clients[seller_name]
-                server_socket.sendto(cancel_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
+                udp_socket.sendto(cancel_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
                 print(f"Sent CANCEL to {seller_name} for item {search_info['item_name']}")
 
                 # Remove the reservation
@@ -169,7 +170,7 @@ def start_server():
             print(f"ERROR: Request {rq} not found in active_searches during CANCEL.")
 
     def process_buy(rq, buyer_name):
-        """Process a BUY message from a buyer."""
+        """Process a BUY message from a client."""
         if rq in active_searches:
             search_info = active_searches[rq]
             seller_name = search_info.get("reserved_seller")
@@ -178,7 +179,7 @@ def start_server():
                 # Send BUY message to the seller
                 buy_message = f"BUY {rq} {search_info['item_name']} {search_info['reserved_price']}"
                 seller_client = all_clients[seller_name]
-                server_socket.sendto(buy_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
+                udp_socket.sendto(buy_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
                 print(f"Sent BUY to {seller_name} for item {search_info['item_name']}")
 
                 # Remove the reservation as it is completed
@@ -188,84 +189,113 @@ def start_server():
         else:
             print(f"ERROR: Request {rq} not found in active_searches during BUY.")
 
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_socket:
-        server_socket.bind((server_ip, server_port))
-        print(f"Server started at {server_ip}:{server_port}")
 
-        while True:
-            message, client_address = server_socket.recvfrom(buffer_size)
-            print(f"Received message from {client_address}: {message.decode()}")
-            message = message.decode()
-            parts = message.split()
+    def handle_message(message, client_address, type):
+        parts = message.split()
+        command = parts[0]
+        rq = parts[1]
 
-            command = parts[0]
-            rq = parts[1]  # Extract the request number for responses
-
-            if command == "REGISTER":
+        if command == "REGISTER":
                 name, ip, udp_port, tcp_port = parts[2:]
                 if name in all_clients:
                     response = f"REGISTER-DENIED {rq} Name already registered"
                 else:
                     all_clients[name] = Client(name, ip, udp_port, tcp_port)
                     response = f"REGISTERED {rq}"
-                server_socket.sendto(response.encode(), client_address)
+                udp_socket.sendto(response.encode(), client_address)
 
-            elif command == "DE-REGISTER":
-                name = parts[2]
-                if name in all_clients:
-                    del all_clients[name]
-                    response = f"DE-REGISTERED {rq}"
-                else:
-                    response = f"DE-REGISTER-FAILED {rq} Not registered"
-                server_socket.sendto(response.encode(), client_address)
+        elif command == "DE-REGISTER":
+            name = parts[2]
+            if name in all_clients:
+                del all_clients[name]
+                response = f"DE-REGISTERED {rq}"
+            else:
+                response = f"DE-REGISTER-FAILED {rq} Not registered"
+            udp_socket.sendto(response.encode(), client_address)
 
-            elif command == "LOOKING_FOR":
-                requester_name = parts[2]
-                item_name = parts[3]
-                description = parts[4]
-                max_price = parts[5]
+        elif command == "LOOKING_FOR":
+            requester_name = parts[2]
+            item_name = parts[3]
+            description = parts[4]
+            max_price = parts[5]
 
-                print(f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
+            print(f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
 
-                broadcast_search(rq, requester_name, item_name, description, max_price)
-                response = f"LOOKING_FOR_ACK {rq} SEARCH request broadcasted"
-                server_socket.sendto(response.encode(), client_address)
+            broadcast_search(rq, requester_name, item_name, description, max_price)
+            response = f"LOOKING_FOR_ACK {rq} SEARCH request broadcasted"
+            udp_socket.sendto(response.encode(), client_address)
 
-            elif command == "OFFER":
-                offer_name = parts[2]
-                item_name = parts[3]
-                price = parts[4]
-                print(f"Received OFFER from {offer_name} for {item_name} at price {price}")
+        elif command == "OFFER":
+            offer_name = parts[2]
+            item_name = parts[3]
+            price = parts[4]
+            print(f"Received OFFER from {offer_name} for {item_name} at price {price}")
 
-                process_offer(rq, offer_name, item_name, price)
+            process_offer(rq, offer_name, item_name, price)
 
-            elif command == "ACCEPT":
-                seller_name = parts[2]
-                item_name = parts[3]
-                max_price = parts[4]
-                print(f"Received ACCEPT from {seller_name} for item {item_name} at max price {max_price}")
+        elif command == "ACCEPT":
+            seller_name = parts[2]
+            item_name = parts[3]
+            max_price = parts[4]
+            print(f"Received ACCEPT from {seller_name} for item {item_name} at max price {max_price}")
 
-                process_accept(rq, seller_name, item_name, max_price)
+            process_accept(rq, seller_name, item_name, max_price)
 
-            elif command == "REFUSE":
-                seller_name = parts[2]
-                item_name = parts[3]
-                max_price = parts[4]
-                print(f"Received REFUSE from {seller_name} for item {item_name} at max price {max_price}")
+        elif command == "REFUSE":
+            seller_name = parts[2]
+            item_name = parts[3]
+            max_price = parts[4]
+            print(f"Received REFUSE from {seller_name} for item {item_name} at max price {max_price}")
 
-                process_refuse(rq, seller_name, item_name, max_price)
+            process_refuse(rq, seller_name, item_name, max_price)
 
-            elif command == "CANCEL":
-                buyer_name = parts[2]
-                print(f"Received CANCEL from {buyer_name} for request {rq}")
+        elif command == "CANCEL":
+            buyer_name = parts[2]
+            print(f"Received CANCEL from {buyer_name} for request {rq}")
 
-                process_cancel(rq, buyer_name)
+            process_cancel(rq, buyer_name)
 
-            elif command == "BUY":
-                buyer_name = parts[2]
-                print(f"Received BUY from {buyer_name} for request {rq}")
+        elif command == "BUY":
+            buyer_name = parts[2]
+            print(f"Received BUY from {buyer_name} for request {rq}")
 
-                process_buy(rq, buyer_name)
+            process_buy(rq, buyer_name)
+
+
+    def TCP_listener(port):
+        global tcp_socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
+            tcp_socket.bind((server_ip, port))
+            tcp_socket.listen(10)
+            print(f"TCP socket started {server_ip}:{port}")
+
+            while True:
+                conn, client_address = tcp_socket.accept()
+                with conn:
+                    message = conn.recv(buffer_size)
+                    print(f"Received TCP message from {client_address}: {message.decode()}")
+                    threading.Thread(target=handle_message, args=(message.decode(), client_address, 'TCP'), daemon=True).start()
+
+    def UDP_listener(port):
+        global udp_socket
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
+            udp_socket.bind((server_ip, port))
+            print(f"UDP socket started {server_ip}:{port}")
+
+            while True:
+                message, client_address = udp_socket.recvfrom(buffer_size)
+                print(f"Received UDP message from {client_address}: {message.decode()}")
+
+                threading.Thread(target=handle_message, args=(message.decode(), client_address, 'UDP'), daemon=True).start()
+
+    print(f"Starting server with ip: {server_ip} TCP port: {tcp_port} UDP port: {udp_port} ")
+
+    threading.Thread(target=TCP_listener, args=(tcp_port,), daemon=True).start()
+    threading.Thread(target=UDP_listener, args=(udp_port,), daemon=True).start()
+
+    while True:
+        pass  # Prevent the main program from exiting
+            
 
 if __name__ == "__main__":
     start_server()
