@@ -10,7 +10,7 @@ class Client:
         self.tcp_port = tcp_port
 
 def start_server():
-    server_ip = "0.0.0.0"
+    server_ip = "127.0.0.1"
     udp_port = 5000
     tcp_port = 5001
     buffer_size = 1024
