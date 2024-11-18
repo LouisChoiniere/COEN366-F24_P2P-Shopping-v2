@@ -10,7 +10,7 @@ class Client:
         self.tcp_port = tcp_port
 
 def start_server():
-    server_ip = "127.0.0.1"
+    server_ip = "0.0.0.0"
     udp_port = 5000
     tcp_port = 5001
     buffer_size = 1024
@@ -20,6 +20,7 @@ def start_server():
 
     def broadcast_search(rq, requester_name, item_name, description, max_price):
         """Send SEARCH message to all clients except the requester."""
+        global udp_socket
         num_sellers = 0
         for client_key, client in all_clients.items():
             if client.name != requester_name:
@@ -40,6 +41,7 @@ def start_server():
 
     def check_offers_after_timeout(rq):
         """Evaluate offers after waiting for 5 minutes or receiving all expected offers."""
+        global udp_socket
         timeout = 300
         start_time = time.time()
 
@@ -57,6 +59,7 @@ def start_server():
 
     def process_offers(rq):
         """Process offers for a request after all responses or timeout."""
+        global udp_socket
         if rq not in active_searches:
             print(f"ERROR: {rq} already removed from active_searches in process_offers.")
             return
@@ -102,6 +105,7 @@ def start_server():
 
     def process_offer(rq, offer_name, item_name, price):
         """Process an OFFER message from a client."""
+        global udp_socket
         if rq in active_searches:
             search_info = active_searches[rq]
             search_info["offers"].append((offer_name, item_name, int(price)))
@@ -111,6 +115,7 @@ def start_server():
 
     def process_accept(rq, seller_name, item_name, max_price):
         """Process an ACCEPT message from a seller."""
+        global udp_socket
         if rq in active_searches:
             search_info = active_searches[rq]
             buyer_name = search_info["requester_name"]
@@ -131,6 +136,7 @@ def start_server():
 
     def process_refuse(rq, seller_name, item_name, max_price):
         """Process a REFUSE message from a seller."""
+        global udp_socket
         if rq in active_searches:
             search_info = active_searches[rq]
             buyer_name = search_info["requester_name"]
@@ -151,26 +157,29 @@ def start_server():
 
     def process_cancel(rq, buyer_name):
         """Process a CANCEL message from a buyer."""
+        global udp_socket
         if rq in active_searches:
+            # If the request exists in active_searches, proceed with cancellation
             search_info = active_searches[rq]
             seller_name = search_info.get("reserved_seller")
 
             if seller_name:
                 # Send CANCEL message to the seller
-                cancel_message = f"CANCEL {rq} {search_info['item_name']} {search_info['reserved_price']}"
+                cancel_message = f"CANCEL {rq} {search_info['item_name']} {search_info.get('reserved_price', 'N/A')}"
                 seller_client = all_clients[seller_name]
                 udp_socket.sendto(cancel_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
                 print(f"Sent CANCEL to {seller_name} for item {search_info['item_name']}")
 
-                # Remove the reservation
-                del active_searches[rq]
-            else:
-                print(f"ERROR: No reservation found for request {rq} during CANCEL.")
+            # Remove the reservation from active_searches
+            del active_searches[rq]
+            print(f"Request {rq} has been canceled and removed from active_searches.")
         else:
-            print(f"ERROR: Request {rq} not found in active_searches during CANCEL.")
+            # If the request doesn't exist in active_searches, log a message but don't raise an error
+            print(f"Request {rq} not found in active_searches. It might have already been processed or canceled.")
 
     def process_buy(rq, buyer_name):
         """Process a BUY message from a client."""
+        global udp_socket
         if rq in active_searches:
             search_info = active_searches[rq]
             seller_name = search_info.get("reserved_seller")
@@ -191,6 +200,7 @@ def start_server():
 
 
     def handle_message(message, client_address, type):
+        global udp_socket
         parts = message.split()
         command = parts[0]
         rq = parts[1]
@@ -295,7 +305,7 @@ def start_server():
 
     while True:
         pass  # Prevent the main program from exiting
-            
+
 
 if __name__ == "__main__":
     start_server()
