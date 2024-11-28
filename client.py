@@ -30,19 +30,22 @@ def start_client():
     pending_search_requests = {}
     pending_negotiations = {}
     pending_reservations = {}
+    registered = False
 
-    def show_menu():
-        print("\n=== P2P Client Commands ===")
-        print("register  (r) - Register with the server")
-        print("deregister(d) - Deregister from the server")
-        print("search    (s) <item_name> <description> <max_price> - Search for an item")
-        print("offer     (o) <rq> <item_name> <price> - Offer an item in response to a search request")
-        print("accept    (a) <rq> - Accept the negotiated price offered by the buyer")
-        print("refuse    (f) <rq> - Refuse the negotiated price offered by the buyer")
-        print("buy       (b) <rq> - Buy an item at the reserved price")
-        print("cancel    (c) <rq> - Cancel the reservation for an item")
-        print("help      (h) - Show this help message")
-        print("quit      (q) - Exit the client\n")
+    def show_menu(registered):
+        print("\n=== Commands ===")
+        if not registered:
+            print("register  (r) - Register with the server")
+        else:
+            print("deregister(d) - Deregister from the server")
+            print("search    (s) <item_name> <description> <max_price> - Search for an item")
+            print("offer     (o) <rq> <item_name> <price> - Offer an item in response to a search request")
+            print("accept    (a) <rq> - Accept the negotiated price offered by the buyer")
+            print("refuse    (f) <rq> - Refuse the negotiated price offered by the buyer")
+            print("buy       (b) <rq> - Buy an item at the reserved price")
+            print("cancel    (c) <rq> - Cancel the reservation for an item")
+            print("help      (h) - Show this help message")
+            print("quit      (q) - Exit the client\n")
 
     def listen_for_messages():
         """Continuously listen for incoming messages from the server."""
@@ -78,7 +81,8 @@ def start_client():
                 rq = parts[1]
                 item_name = parts[2]
                 price = parts[3]
-                print(f"\nFOUND: The item '{item_name}' is available at price {price}. You may proceed with the purchase.")
+                print(
+                    f"\nFOUND: The item '{item_name}' is available at price {price}. You may proceed with the purchase.")
                 pending_reservations[rq] = (item_name, price)
 
             # Handle NOT_FOUND message
@@ -97,7 +101,7 @@ def start_client():
                 pending_reservations[rq] = (item_name, price)
 
     def register():
-        nonlocal client_name, client_udp_port, client_tcp_port, c_socket
+        nonlocal client_name, client_udp_port, client_tcp_port, c_socket, registered
 
         client_name = input("Enter your name: ")
         client_udp_port = input("Enter your UDP port number: ")
@@ -106,31 +110,43 @@ def start_client():
 
         # Initialize the UDP socket
         c_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        c_socket.bind((client_ip, int(client_udp_port)))  # Use client_ip here
+        c_socket.bind((client_ip, int(client_udp_port)))  # Bind to the provided UDP port
 
-        # Send registration message to server in the correct format
+        # Send registration message to server
         message = f"REGISTER {rq} {client_name} {client_ip} {client_udp_port} {client_tcp_port}"
         c_socket.sendto(message.encode(), (server_ip, server_port))
 
         # Receive response from the server
         response, server_address = c_socket.recvfrom(buffer_size)
-        print(f"Server response: {response.decode()}")
+        response_message = response.decode()
+        print(f"Server response: {response_message}")
 
-        # Start the listener thread only after registration is successful
-        listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
-        listener_thread.start()
+        if "REGISTERED" in response_message:
+            # Registration successful
+            registered = True
+            print("Registration successful.")
+            # Start the listener thread
+            listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
+            listener_thread.start()
+            return True  # Indicate success
+        elif "REGISTER-DENIED" in response_message:
+            # Registration denied
+            print("Registration denied. Please try again.")
+            return False  # Indicate failure
 
     def deregister():
+        nonlocal registered
         if not client_name:
             print("You must register before deregistering.")
             return
-
         rq = generate_rq()
         message = f"DE-REGISTER {rq} {client_name}"
         c_socket.sendto(message.encode(), (server_ip, server_port))
 
         response, server_address = c_socket.recvfrom(buffer_size)
         print(f"Server response: {response.decode()}")
+        if "DE-REGISTERED" in response.decode():
+            registered = False
 
     def looking_for():
         if not client_name:
@@ -238,38 +254,45 @@ def start_client():
 
         del pending_reservations[rq]
 
-    def handle_command(command):
-        if command in ["register", "r"]:
+    def handle_command(command, registered):
+        if not registered and command in ["register", "r"]:
             register()
-        elif command in ["deregister", "d"]:
-            deregister()
-        elif command.startswith("search") or command.startswith("s"):
-            looking_for()
-        elif command.startswith("offer") or command.startswith("o"):
-            offer_item()
-        elif command.startswith("accept") or command.startswith("a"):
-            accept_negotiation()
-        elif command.startswith("refuse") or command.startswith("f"):
-            refuse_negotiation()
-        elif command.startswith("buy") or command.startswith("b"):
-            buy_item()
-        elif command.startswith("cancel") or command.startswith("c"):
-            cancel_reservation()
-        elif command == "help" or command == "h":
-            show_menu()
-        elif command == "quit" or command == "q":
-            print("Exiting client.")
+            return True
+        elif not registered:
+            print("You must register first.")
             return False
         else:
-            print("Unknown command. Type 'help' or 'h' for available commands.")
-        return True
+            if command in ["deregister", "d"]:
+                deregister()
+                return False
+            if command.startswith("search") or command.startswith("s"):
+                looking_for()
+            if command.startswith("offer") or command.startswith("o"):
+                offer_item()
+            if command.startswith("accept") or command.startswith("a"):
+                accept_negotiation()
+            if command.startswith("refuse") or command.startswith("f"):
+                refuse_negotiation()
+            if command.startswith("buy") or command.startswith("b"):
+                buy_item()
+            if command.startswith("cancel") or command.startswith("c"):
+                cancel_reservation()
+            if command == "help" or command == "h":
+                show_menu()
+            if command == "quit" or command == "q":
+                print("Exiting client.")
+                return False
+            else:
+                print("Unknown command. Type 'help' or 'h' for available commands.")
+            return registered
 
-    show_menu()
     while True:
+        show_menu(registered)
         command = input("Enter command: ").strip().lower()
-        if not handle_command(command):
+        registered = handle_command(command, registered)
+        if command == "quit" or command == "q":
+            print("Exiting client.")
             break
-
     if c_socket:
         c_socket.close()
 
