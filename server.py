@@ -136,8 +136,11 @@ def start_server():
             udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
             print(f"Sent FOUND to {buyer_name} for item {item_name} at price {price}")
 
-            # Store reservation information
-            reservations[rq] = {"seller_name": seller_name, "item_name": item_name, "price": price}
+            # Update the active search status instead of deleting
+            active_searches[rq]["status"] = "RESERVED"
+            active_searches[rq]["reserved_seller"] = seller_name
+            active_searches[rq]["reserved_price"] = price
+
         else:
             # If no valid offers, attempt negotiation
             above_max_offers = [offer for offer in offers if offer[2] > max_price]
@@ -149,6 +152,10 @@ def start_server():
                 negotiate_message = f"NEGOTIATE {rq} {item_name} {max_price}"
                 udp_socket.sendto(negotiate_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
                 print(f"Sent NEGOTIATE to {seller_name} for item {item_name} at max price {max_price}")
+
+            else:
+                print(f"No valid offers found for {rq}. Cleaning up.")
+                del active_searches[rq]  # Clean up only when no negotiation is possible
 
     def process_offer(rq, offer_name, item_name, price):
         """Process an OFFER message from a client."""
@@ -162,7 +169,7 @@ def start_server():
 
     def process_accept(rq, seller_name, item_name, max_price):
         """Process an ACCEPT message from a seller."""
-        global udp_socket
+        global reservations
         if rq in active_searches:
             search_info = active_searches[rq]
             buyer_name = search_info["requester_name"]
@@ -170,10 +177,21 @@ def start_server():
             if buyer_name in all_clients:
                 buyer_client = all_clients[buyer_name]
 
-                # Send FOUND message to the buyer to confirm availability at max price
+                # Send FOUND message to the buyer to confirm availability
                 found_message = f"FOUND {rq} {item_name} {max_price}"
                 udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
                 print(f"Sent FOUND to {buyer_name} for item {item_name} at price {max_price}")
+
+                # Store the reservation
+                reservations[rq] = {
+                    "seller_name": seller_name,
+                    "item_name": item_name,
+                    "price": max_price,
+                }
+                print(f"Reservation created for {rq}: {reservations[rq]}")
+
+                # Log reservation creation
+                log_action(f"Reservation created: {reservations[rq]}")
 
                 del active_searches[rq]
             else:
@@ -225,26 +243,103 @@ def start_server():
             print(f"Request {rq} not found in active_searches. It might have already been processed or canceled.")
 
     def process_buy(rq, buyer_name):
-        """Process a BUY message from a client."""
-        global udp_socket
-        if rq in active_searches:
-            search_info = active_searches[rq]
-            seller_name = search_info.get("reserved_seller")
+        """Process a BUY message and handle the transaction."""
+        global reservations
 
-            if seller_name:
-                # Send BUY message to the seller
-                buy_message = f"BUY {rq} {search_info['item_name']} {search_info['reserved_price']}"
-                seller_client = all_clients[seller_name]
-                udp_socket.sendto(buy_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
-                print(f"Sent BUY to {seller_name} for item {search_info['item_name']}")
+        # Log the reservation state before lookup
+        log_action(f"Current reservations: {reservations}")
+        print(f"Looking up reservation for RQ: {rq}")
 
-                # Remove the reservation as it is completed
-                del active_searches[rq]
+        if rq not in reservations:
+            log_action(f"Reservation {rq} not found.")
+            print(f"Reservation {rq} not found.")
+            return
+
+        transaction_info = reservations[rq]
+        log_action(f"Reservation found: {transaction_info}")
+
+        seller_name = transaction_info["seller_name"]
+        item_name = transaction_info["item_name"]
+        price = transaction_info["price"]
+
+        # Ensure both buyer and seller exist
+        if buyer_name not in all_clients or seller_name not in all_clients:
+            print("Buyer or seller not registered.")
+            return
+
+        buyer = all_clients[buyer_name]
+        seller = all_clients[seller_name]
+
+        # Prepare TCP connections
+        buyer_conn = (buyer.ip, int(buyer.tcp_port))
+        seller_conn = (seller.ip, int(seller.tcp_port))
+        inform_message = f"INFORM_Req {rq} {item_name} {price}"
+
+        try:
+            # Send INFORM_Req to buyer and seller
+            print(f"Sending INFORM_Req to buyer ({buyer.name}) and seller ({seller.name})")
+            buyer_response = send_and_receive_tcp(buyer_conn, inform_message)
+            seller_response = send_and_receive_tcp(seller_conn, inform_message)
+
+            # If both responses are received, simulate transaction
+            if buyer_response and seller_response:
+                print(f"Transaction successful for {item_name} at price {price}")
+                log_action(f"Transaction completed for {item_name} at {price}.")
+                del reservations[rq]
             else:
-                print(f"ERROR: No reservation found for request {rq} during BUY.")
-        else:
-            print(f"ERROR: Request {rq} not found in active_searches during BUY.")
+                # Handle transaction failure
+                print(f"Transaction failed for {item_name}. Sending CANCEL messages.")
+                cancel_message = f"CANCEL {rq} Transaction failed"
+                send_tcp_message(buyer_conn, cancel_message)
+                send_tcp_message(seller_conn, cancel_message)
 
+        except Exception as e:
+            print(f"Error during transaction: {e}")
+            cancel_message = f"CANCEL {rq} Transaction error"
+            send_tcp_message(buyer_conn, cancel_message)
+            send_tcp_message(seller_conn, cancel_message)
+
+
+        except Exception as e:
+            print(f"Error during transaction: {e}")
+            cancel_message = f"CANCEL {rq} Transaction error"
+            send_tcp_message(buyer_conn, cancel_message)
+            send_tcp_message(seller_conn, cancel_message)
+
+    def send_and_receive_tcp(connection, message):
+        """Send a message over TCP and wait for a response."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
+                tcp_socket.settimeout(300)  # Set a timeout
+                tcp_socket.connect(connection)
+                tcp_socket.sendall(message.encode())
+                print(f"Sent message: {message}")
+
+                response = tcp_socket.recv(1024).decode()  # Receive response
+                print(f"Received response: {response}")
+                return response  # Return the response
+        except socket.timeout:
+            print(f"Error: TCP connection to {connection} timed out.")
+        except ConnectionRefusedError:
+            print(f"Error: Connection to {connection} was refused.")
+        except Exception as e:
+            print(f"Error in TCP communication: {e}")
+        return None  # Return None in case of an error
+
+    def send_tcp_message(connection, message):
+        """Send a message over TCP without waiting for a response."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
+                tcp_socket.settimeout(5)  # Set a timeout of 5 seconds
+                tcp_socket.connect(connection)
+                tcp_socket.sendall(message.encode())
+                print(f"Sent message: {message}")
+        except socket.timeout:
+            print(f"Error: TCP connection to {connection} timed out.")
+        except ConnectionRefusedError:
+            print(f"Error: Connection to {connection} was refused.")
+        except Exception as e:
+            print(f"Error sending TCP message: {e}")
 
     def handle_message(message, client_address, type):
         global udp_socket
@@ -336,7 +431,7 @@ def start_server():
                     message = conn.recv(buffer_size)
                     print(f"Received TCP message from {client_address}: {message.decode()}")
                     threading.Thread(target=handle_message, args=(message.decode(), client_address, 'TCP'), daemon=True).start()
-    load_data()
+                    load_data()
     def UDP_listener(port):
         global udp_socket
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
