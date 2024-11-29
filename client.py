@@ -100,6 +100,50 @@ def start_client():
                 print(f"\nRESERVE: You have reserved the item '{item_name}' at price {price}. Awaiting buyer's action.")
                 pending_reservations[rq] = (item_name, price)
 
+    def start_tcp_listener():
+        """Start a TCP server to handle incoming messages from the server."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
+            tcp_socket.bind((client_ip, int(client_tcp_port)))
+            tcp_socket.listen(5)
+            print(f"TCP listener started on {client_ip}:{client_tcp_port}")
+
+            while True:
+                conn, addr = tcp_socket.accept()
+                threading.Thread(target=handle_tcp_transaction, args=(conn,), daemon=True).start()
+
+    def handle_tcp_transaction(conn):
+        """Handle incoming TCP messages like INFORM_Req."""
+        try:
+            message = conn.recv(buffer_size).decode()
+            if message.startswith("INFORM_Req"):
+                # Parse the INFORM_Req message
+                parts = message.split()
+                rq = parts[1]
+                item_name = parts[2]
+                price = parts[3]
+
+                print(f"\nTransaction request received for {item_name} at {price}.")
+
+                # Collect all required transaction information at once
+                print("Enter transaction details:")
+                cc_number = input(" - Credit card number: ")
+
+                # Handle expiry date input
+                cc_exp_date = input(" - Expiry date (MM/YY or MMYY): ")
+                if len(cc_exp_date) == 4 and cc_exp_date.isdigit():  # Normalize MMYY to MM/YY
+                    cc_exp_date = f"{cc_exp_date[:2]}/{cc_exp_date[2:]}"
+
+                address = input(" - Address: ")
+
+                # Send INFORM_Res response
+                response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_exp_date} {address}"
+                conn.sendall(response.encode())
+                print("Transaction information sent to the server.")
+        except Exception as e:
+            print(f"Error handling TCP transaction: {e}")
+        finally:
+            conn.close()
+
     def register():
         nonlocal client_name, client_udp_port, client_tcp_port, c_socket, registered
 
@@ -126,8 +170,13 @@ def start_client():
             registered = True
             print("Registration successful.")
             # Start the listener thread
+            # Start UDP listener thread
             listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
             listener_thread.start()
+
+            # Start TCP listener thread
+            tcp_listener_thread = threading.Thread(target=start_tcp_listener, daemon=True)
+            tcp_listener_thread.start()
             return True  # Indicate success
         elif "REGISTER-DENIED" in response_message:
             # Registration denied
