@@ -106,7 +106,7 @@ def start_server():
 
     def process_offers(rq):
         """Process offers for a request after all responses or timeout."""
-        global udp_socket
+        global udp_socket,reservations
         if rq not in active_searches:
             print(f"ERROR: {rq} already removed from active_searches in process_offers.")
             return
@@ -135,7 +135,12 @@ def start_server():
             found_message = f"FOUND {rq} {item_name} {price}"
             udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
             print(f"Sent FOUND to {buyer_name} for item {item_name} at price {price}")
-
+            # Store the reservation
+            reservations[rq] = {
+                "seller_name": seller_name,
+                "item_name": item_name,
+                "price": max_price,
+            }
             # Update the active search status instead of deleting
             active_searches[rq]["status"] = "RESERVED"
             active_searches[rq]["reserved_seller"] = seller_name
