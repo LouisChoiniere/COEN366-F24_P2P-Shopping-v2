@@ -3,6 +3,7 @@ import threading
 import time
 import json
 import os
+import argparse
 
 
 class Client:
@@ -13,6 +14,7 @@ class Client:
         self.tcp_port = tcp_port
 
     def to_dict(self):
+        """Convert client data from an object to a dictionary (Used to save data to file)"""
         return {
             "name": self.name,
             "ip": self.ip,
@@ -21,15 +23,29 @@ class Client:
         }
 
     def from_dict(data):
+        """Convert client data from a dictionary to a Client object (Used to load data from file)"""
         return Client(data["name"], data["ip"], data["udp_port"], data["tcp_port"])
 
 
 def start_server():
-    server_ip = "0.0.0.0"
-    udp_port = 5000
-    tcp_port = 5001
-    buffer_size = 1024
-    data_file = "server_data.json"
+
+    def parse_arguments():
+        parser = argparse.ArgumentParser(description="P2P Shopping Server")
+        parser.add_argument("--server_ip", type=str, default="0.0.0.0", help="Server IP address")
+        parser.add_argument("--udp_port", type=int, default=5000, help="UDP port number")
+        parser.add_argument("--tcp_port", type=int, default=5001, help="TCP port number")
+        parser.add_argument("--buffer_size", type=int, default=1024, help="Buffer size for socket communication")
+        parser.add_argument("--data_file", type=str, default="server_data.json", help="File to store server data")
+        return parser.parse_args()
+
+    args = parse_arguments()
+    
+    server_ip = args.server_ip
+    udp_port = args.udp_port
+    tcp_port = args.tcp_port
+    buffer_size = args.buffer_size
+    data_file = args.data_file
+
     all_clients = {}
     active_searches = {}
     reservations = {}
@@ -320,6 +336,9 @@ def start_server():
             cancel_message = f"CANCEL {rq} Transaction error"
             send_tcp_message(buyer_conn, cancel_message)
             send_tcp_message(seller_conn, cancel_message)
+
+    def process_purchase(rq, buyer_name):
+        return 0
 
     def send_and_receive_tcp(connection, message):
         """Send a message over TCP and wait for a response."""
