@@ -4,6 +4,7 @@ import time
 import json
 import os
 
+
 class Client:
     def __init__(self, name, ip, udp_port, tcp_port):
         self.name = name
@@ -21,6 +22,7 @@ class Client:
 
     def from_dict(data):
         return Client(data["name"], data["ip"], data["udp_port"], data["tcp_port"])
+
 
 def start_server():
     server_ip = "0.0.0.0"
@@ -86,6 +88,7 @@ def start_server():
         threading.Thread(target=check_offers_after_timeout, args=(rq,), daemon=True).start()
         log_action(f"SEARCH broadcasted for {item_name} by {requester_name}")
         save_data()
+
     def check_offers_after_timeout(rq):
         """Evaluate offers after waiting for 5 minutes or receiving all expected offers."""
         global udp_socket
@@ -106,7 +109,7 @@ def start_server():
 
     def process_offers(rq):
         """Process offers for a request after all responses or timeout."""
-        global udp_socket,reservations
+        global udp_socket, reservations
         if rq not in active_searches:
             print(f"ERROR: {rq} already removed from active_searches in process_offers.")
             return
@@ -353,15 +356,15 @@ def start_server():
         rq = parts[1]
 
         if command == "REGISTER":
-                name, ip, udp_port, tcp_port = parts[2:]
-                if name in all_clients:
-                    response = f"REGISTER-DENIED {rq} Name already registered"
-                else:
-                    all_clients[name] = Client(name, ip, udp_port, tcp_port)
-                    response = f"REGISTERED {rq}"
-                    log_action(f"Client {name} registered with IP {ip}, UDP Port {udp_port}, TCP Port {tcp_port}")
-                    save_data()
-                udp_socket.sendto(response.encode(), client_address)
+            name, ip, udp_port, tcp_port = parts[2:]
+            if name in all_clients:
+                response = f"REGISTER-DENIED {rq} Name already registered"
+            else:
+                all_clients[name] = Client(name, ip, udp_port, tcp_port)
+                response = f"REGISTERED {rq}"
+                log_action(f"Client {name} registered with IP {ip}, UDP Port {udp_port}, TCP Port {tcp_port}")
+                save_data()
+            udp_socket.sendto(response.encode(), client_address)
 
         elif command == "DE-REGISTER":
             name = parts[2]
@@ -381,7 +384,8 @@ def start_server():
             max_price = parts[5]
 
             print(f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
-            log_action(f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
+            log_action(
+                f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
             broadcast_search(rq, requester_name, item_name, description, max_price)
             response = f"LOOKING_FOR_ACK {rq} SEARCH request broadcasted"
             udp_socket.sendto(response.encode(), client_address)
@@ -422,7 +426,6 @@ def start_server():
             log_action(f"Received REFUSE from {buyer_name}")
             process_buy(rq, buyer_name)
 
-
     def TCP_listener(port):
         global tcp_socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
@@ -435,8 +438,10 @@ def start_server():
                 with conn:
                     message = conn.recv(buffer_size)
                     print(f"Received TCP message from {client_address}: {message.decode()}")
-                    threading.Thread(target=handle_message, args=(message.decode(), client_address, 'TCP'), daemon=True).start()
+                    threading.Thread(target=handle_message, args=(message.decode(), client_address, 'TCP'),
+                                     daemon=True).start()
                     load_data()
+
     def UDP_listener(port):
         global udp_socket
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
@@ -447,7 +452,9 @@ def start_server():
                 message, client_address = udp_socket.recvfrom(buffer_size)
                 print(f"Received UDP message from {client_address}: {message.decode()}")
 
-                threading.Thread(target=handle_message, args=(message.decode(), client_address, 'UDP'), daemon=True).start()
+                threading.Thread(target=handle_message, args=(message.decode(), client_address, 'UDP'),
+                                 daemon=True).start()
+
     load_data()
     print(f"Starting server with ip: {server_ip} TCP port: {tcp_port} UDP port: {udp_port} ")
 
