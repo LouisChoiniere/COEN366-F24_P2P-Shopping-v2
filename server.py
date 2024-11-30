@@ -291,8 +291,22 @@ def start_server():
 
             # If both responses are received, simulate transaction
             if buyer_response and seller_response:
+                # Calculate transaction fee and seller's share
+                transaction_fee = price * 0.1
+                seller_share = price * 0.9
+
+                # Log transaction details
                 print(f"Transaction successful for {item_name} at price {price}")
                 log_action(f"Transaction completed for {item_name} at {price}.")
+                log_action(f"Transaction Fee: {transaction_fee:.2f}, Seller's Share: {seller_share:.2f}")
+
+                # Simulate charging buyer's credit card and crediting seller
+                print(f"Charging buyer's credit card: {price}")
+                print(f"Crediting seller's account: {seller_share:.2f} (90% of the price)")
+                log_action(
+                    f"Buyer charged: {price}, Seller credited: {seller_share:.2f}, Fee collected: {transaction_fee:.2f}")
+
+                # Remove the reservation
                 del reservations[rq]
             else:
                 # Handle transaction failure
