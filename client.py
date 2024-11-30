@@ -118,19 +118,18 @@ def start_client():
 
                 print(f"\nTransaction request received for {item_name} at {price}.")
 
-                # Collect all required transaction information at once
+                # Collect all required transaction information
                 print("Enter transaction details:")
-                cc_number = input(" - Credit card number: ")
+                cc_number = input(" - Credit card number: ").strip()
 
-                # Handle expiry date input
-                cc_exp_date = input(" - Expiry date (MM/YY or MMYY): ")
-                if len(cc_exp_date) == 4 and cc_exp_date.isdigit():  # Normalize MMYY to MM/YY
-                    cc_exp_date = f"{cc_exp_date[:2]}/{cc_exp_date[2:]}"
+                cc_expiry = input(" - Expiry date (MM/YY or MMYY): ").strip()
+                if len(cc_expiry) == 4 and cc_expiry.isdigit():
+                    cc_expiry = f"{cc_expiry[:2]}/{cc_expiry[2:]}"  # Normalize MMYY to MM/YY
 
-                address = input(" - Address: ")
+                address = input(" - Address: ").strip()
 
                 # Send INFORM_Res response
-                response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_exp_date} {address}"
+                response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_expiry} {address}"
                 conn.sendall(response.encode())
                 print("Transaction information sent to the server.")
         except Exception as e:
@@ -141,41 +140,46 @@ def start_client():
     def register():
         nonlocal client_name, client_udp_port, client_tcp_port, c_socket, registered
 
-        client_name = input("Enter your name: ")
-        client_udp_port = input("Enter your UDP port number: ")
-        client_tcp_port = input("Enter your TCP port number: ")
-        rq = generate_rq()
+        while not registered:
+            print("\n=== Registration ===")
+            client_name = input("Enter your name: ")
 
-        # Initialize the UDP socket
-        c_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        c_socket.bind((client_ip, int(client_udp_port)))  # Bind to the provided UDP port
+            client_udp_port = random.randint(5500, 9999)
+            client_tcp_port = random.randint(5500, 9999)
+            print(f"Auto-generated UDP port: {client_udp_port}")
+            print(f"Auto-generated TCP port: {client_tcp_port}")
+            rq = generate_rq()
 
-        # Send registration message to server
-        message = f"REGISTER {rq} {client_name} {client_ip} {client_udp_port} {client_tcp_port}"
-        c_socket.sendto(message.encode(), (server_ip, server_port))
+            # Initialize the UDP socket
+            c_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            c_socket.bind((client_ip, int(client_udp_port)))  # Bind to the provided UDP port
 
-        # Receive response from the server
-        response, server_address = c_socket.recvfrom(buffer_size)
-        response_message = response.decode()
-        print(f"Server response: {response_message}")
+            # Send registration message to server
+            message = f"REGISTER {rq} {client_name} {client_ip} {client_udp_port} {client_tcp_port}"
+            c_socket.sendto(message.encode(), (server_ip, server_port))
 
-        if "REGISTERED" in response_message:
-            # Registration successful
-            registered = True
-            print("Registration successful.")
-            # Start the listener thread
-            # Start UDP listener thread
-            listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
-            listener_thread.start()
+            # Receive response from the server
+            response, server_address = c_socket.recvfrom(buffer_size)
+            response_message = response.decode()
+            print(f"Server response: {response_message}")
 
-            # Start TCP listener thread
-            tcp_listener_thread = threading.Thread(target=start_tcp_listener, daemon=True)
-            tcp_listener_thread.start()
-            return True  # Indicate success
-        elif "REGISTER-DENIED" in response_message:
-            # Registration denied
-            print("Registration denied. Please try again.")
-            return False  # Indicate failure
+            if "REGISTERED" in response_message:
+                # Registration successful
+                registered = True
+                print("Registration successful.")
+                # Start the listener threads
+                listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
+                listener_thread.start()
+
+                tcp_listener_thread = threading.Thread(target=start_tcp_listener, daemon=True)
+                tcp_listener_thread.start()
+                return True  # Exit loop and indicate success
+            elif "REGISTER-DENIED" in response_message:
+                # Registration denied
+                print("Registration denied. User already exists. Please try again.")
+                print("Hint: Choose a unique name or different port numbers.")
+                c_socket.close()  # Close the current socket to allow re-registration
+                continue  # Restart the registration loop
 
     def deregister():
         nonlocal registered
