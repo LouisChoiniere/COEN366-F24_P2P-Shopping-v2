@@ -142,7 +142,7 @@ def start_server():
             reservations[rq] = {
                 "seller_name": seller_name,
                 "item_name": item_name,
-                "price": max_price,
+                "price": price,
             }
             # Update the active search status instead of deleting
             active_searches[rq]["status"] = "RESERVED"
@@ -300,13 +300,6 @@ def start_server():
                 cancel_message = f"CANCEL {rq} Transaction failed"
                 send_tcp_message(buyer_conn, cancel_message)
                 send_tcp_message(seller_conn, cancel_message)
-
-        except Exception as e:
-            print(f"Error during transaction: {e}")
-            cancel_message = f"CANCEL {rq} Transaction error"
-            send_tcp_message(buyer_conn, cancel_message)
-            send_tcp_message(seller_conn, cancel_message)
-
 
         except Exception as e:
             print(f"Error during transaction: {e}")
