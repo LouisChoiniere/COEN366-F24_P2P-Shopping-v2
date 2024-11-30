@@ -15,13 +15,7 @@ def start_client():
     buffer_size = 1024
 
     # Allow manual or automatic detection of the client IP
-    client_ip = input("Enter your IP address (leave blank to auto-detect): ")
-    if not client_ip:
-        # Automatically detect the client's IP address
-        client_ip = socket.gethostbyname(socket.gethostname())
-        print(f"Automatically detected client IP: {client_ip}")
-    else:
-        print(f"Using manually entered client IP: {client_ip}")
+    client_ip = socket.gethostbyname(socket.gethostname())
 
     client_name = ""
     client_udp_port = ""
