@@ -50,7 +50,7 @@ def start_server():
     reservations = {}
 
     def load_data():
-        if os.path.exists(data_file):
+        if os.path.exists(data_file) and os.path.getsize(data_file) > 0:
             with open(data_file, "r") as file:
                 data = json.load(file)
                 # Load clients
@@ -64,7 +64,7 @@ def start_server():
                 reservations = data.get("reservations", {})
             print("Data loaded from file.")
         else:
-            print("No previous data file found. Starting fresh.")
+            print("No previous data file found or file is empty. Starting fresh.")
 
     def save_data():
         data = {

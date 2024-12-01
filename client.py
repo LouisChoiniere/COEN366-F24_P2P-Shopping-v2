@@ -1,6 +1,9 @@
 import socket
 import random
 import threading
+import time
+from asyncio import wait_for
+from time import sleep
 
 
 def generate_rq():
@@ -25,11 +28,13 @@ def start_client():
     pending_negotiations = {}
     pending_reservations = {}
     registered = False
+    exiting = False
 
     def show_menu(registered):
         print("\n=== Commands ===")
         if not registered:
             print("register  (r) - Register with the server")
+            print("quit      (q) - Exit the client\n")
         else:
             print("deregister(d) - Deregister from the server")
             print("search    (s) <item_name> <description> <max_price> - Search for an item")
@@ -43,7 +48,9 @@ def start_client():
 
     def listen_for_messages():
         """Continuously listen for incoming messages from the server."""
-        while True:
+        nonlocal c_socket, registered, exiting
+
+        while not exiting:
             response, server_address = c_socket.recvfrom(buffer_size)
             response = response.decode()
             print(f"\nReceived message from server: {response}\nEnter command:")
@@ -94,6 +101,10 @@ def start_client():
                 print(f"\nRESERVE: You have reserved the item '{item_name}' at price {price}. Awaiting buyer's action.")
                 pending_reservations[rq] = (item_name, price)
 
+            elif command == "DE-REGISTERED":
+                registered = False
+                print(f"\nDE-REGISTERED: You have been deregistered from the server.")
+
     def start_tcp_listener():
         """Start a TCP server to handle incoming messages from the server."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
@@ -101,7 +112,7 @@ def start_client():
             tcp_socket.listen(5)
             print(f"TCP listener started on {client_ip}:{client_tcp_port}")
 
-            while True:
+            while not exiting:
                 conn, addr = tcp_socket.accept()
                 threading.Thread(target=handle_tcp_transaction, args=(conn,), daemon=True).start()
 
@@ -186,10 +197,15 @@ def start_client():
         message = f"DE-REGISTER {rq} {client_name}"
         c_socket.sendto(message.encode(), (server_ip, server_port))
 
-        response, server_address = c_socket.recvfrom(buffer_size)
-        print(f"Server response: {response.decode()}")
-        if "DE-REGISTERED" in response.decode():
-            registered = False
+    def quit():
+        nonlocal exiting
+
+        if registered: deregister()
+        while registered:
+            sleep(1)
+
+        exiting = True
+        print("Exiting client.")
 
     def looking_for():
         if not client_name:
@@ -298,6 +314,10 @@ def start_client():
         del pending_reservations[rq]
 
     def handle_command(command, registered):
+        if command.startswith("quit") or command.startswith("q"):
+            quit()
+            return False
+
         if not registered and command in ["register", "r"]:
             register()
             return True
@@ -322,20 +342,21 @@ def start_client():
                 cancel_reservation()
             if command == "help" or command == "h":
                 show_menu()
-            if command == "quit" or command == "q":
-                print("Exiting client.")
-                return False
             else:
                 print("Unknown command. Type 'help' or 'h' for available commands.")
             return registered
 
-    while True:
+    while not exiting:
         show_menu(registered)
         command = input("Enter command: ").strip().lower()
         registered = handle_command(command, registered)
-        if command == "quit" or command == "q":
-            print("Exiting client.")
-            break
+
+
+    # Close all active threads for graceful termination
+    for thread in threading.enumerate():
+        if thread is not threading.main_thread():
+            thread.join(timeout=1)
+
     if c_socket:
         c_socket.close()
 
