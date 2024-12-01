@@ -28,7 +28,6 @@ class Client:
 
 
 def start_server():
-
     def parse_arguments():
         parser = argparse.ArgumentParser(description="P2P Shopping Server")
         parser.add_argument("--server_ip", type=str, default="0.0.0.0", help="Server IP address")
@@ -39,7 +38,7 @@ def start_server():
         return parser.parse_args()
 
     args = parse_arguments()
-    
+
     server_ip = args.server_ip
     udp_port = args.udp_port
     tcp_port = args.tcp_port
@@ -308,8 +307,8 @@ def start_server():
             # If both responses are received, simulate transaction
             if buyer_response and seller_response:
                 # Calculate transaction fee and seller's share
-                transaction_fee = price * 0.1
-                seller_share = price * 0.9
+                transaction_fee = float(price) * 0.1
+                seller_share = float(price) * 0.9
 
                 # Log transaction details
                 print(f"Transaction successful for {item_name} at price {price}")
@@ -319,8 +318,7 @@ def start_server():
                 # Simulate charging buyer's credit card and crediting seller
                 print(f"Charging buyer's credit card: {price}")
                 print(f"Crediting seller's account: {seller_share:.2f} (90% of the price)")
-                log_action(
-                    f"Buyer charged: {price}, Seller credited: {seller_share:.2f}, Fee collected: {transaction_fee:.2f}")
+                log_action(f"Buyer charged: {price}, Seller credited: {seller_share:.2f}, Fee collected: {transaction_fee:.2f}")
 
                 # Remove the reservation
                 del reservations[rq]
@@ -337,8 +335,7 @@ def start_server():
             send_tcp_message(buyer_conn, cancel_message)
             send_tcp_message(seller_conn, cancel_message)
 
-    def process_purchase(rq, buyer_name):
-        return 0
+
 
     def send_and_receive_tcp(connection, message):
         """Send a message over TCP and wait for a response."""
@@ -352,6 +349,7 @@ def start_server():
                 response = tcp_socket.recv(1024).decode()  # Receive response
                 print(f"Received response: {response}")
                 return response  # Return the response
+
         except socket.timeout:
             print(f"Error: TCP connection to {connection} timed out.")
         except ConnectionRefusedError:
@@ -443,13 +441,13 @@ def start_server():
         elif command == "CANCEL":
             buyer_name = parts[2]
             print(f"Received CANCEL from {buyer_name} for request {rq}")
-            log_action(f"Received REFUSE from {buyer_name}")
+            log_action(f"Received Cancel from {buyer_name}")
             process_cancel(rq, buyer_name)
 
         elif command == "BUY":
             buyer_name = parts[2]
             print(f"Received BUY from {buyer_name} for request {rq}")
-            log_action(f"Received REFUSE from {buyer_name}")
+            log_action(f"Received Buy from {buyer_name}")
             process_buy(rq, buyer_name)
 
     def TCP_listener(port):
