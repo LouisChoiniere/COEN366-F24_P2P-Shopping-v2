@@ -117,16 +117,12 @@ def start_client():
                 price = parts[3]
 
                 print(f"\nTransaction request received for {item_name} at {price}.")
-
-                # Collect all required transaction information
-                print("Enter transaction details:")
                 cc_number = input(" - Credit card number: ").strip()
-
+                print(cc_number)
                 cc_expiry = input(" - Expiry date (MM/YY or MMYY): ").strip()
-                if len(cc_expiry) == 4 and cc_expiry.isdigit():
-                    cc_expiry = f"{cc_expiry[:2]}/{cc_expiry[2:]}"  # Normalize MMYY to MM/YY
-
+                print(cc_expiry)
                 address = input(" - Address: ").strip()
+                print(address)
 
                 # Send INFORM_Res response
                 response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_expiry} {address}"
