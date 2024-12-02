@@ -2,55 +2,55 @@ import socket
 import random
 import threading
 import time
-from asyncio import wait_for
-from time import sleep
+
+input_lock = threading.Lock()
+out_lock = threading.Lock()
 
 
 def generate_rq():
-    """Generate a random request number."""
     return f"RQ{random.randint(1000, 9999)}"
 
 
 def start_client():
-    # Prompt for the server IP address
-    server_ip = input("Enter the server IP address: ")
-    server_port = 5000
-    buffer_size = 1024
+    global registered
+    with input_lock:
 
-    # Allow manual or automatic detection of the client IP
-    client_ip = socket.gethostbyname(socket.gethostname())
+        server_ip = input("Enter the server IP address: ")
+        server_port = 5000
+        buffer_size = 1024
 
-    client_name = ""
-    client_udp_port = ""
-    client_tcp_port = ""
-    c_socket = None
-    pending_search_requests = {}
-    pending_negotiations = {}
-    pending_reservations = {}
-    registered = False
-    exiting = False
+        client_ip = socket.gethostbyname(socket.gethostname())
+
+        client_name = ""
+        client_udp_port = ""
+        client_tcp_port = ""
+        c_socket = None
+        pending_search_requests = {}
+        pending_negotiations = {}
+        pending_reservations = {}
+        registered = False
+        transaction_flag = threading.Event()
 
     def show_menu(registered):
-        print("\n=== Commands ===")
-        if not registered:
-            print("register  (r) - Register with the server")
-            print("quit      (q) - Exit the client\n")
-        else:
-            print("deregister(d) - Deregister from the server")
-            print("search    (s) <item_name> <description> <max_price> - Search for an item")
-            print("offer     (o) <rq> <item_name> <price> - Offer an item in response to a search request")
-            print("accept    (a) <rq> - Accept the negotiated price offered by the buyer")
-            print("refuse    (f) <rq> - Refuse the negotiated price offered by the buyer")
-            print("buy       (b) <rq> - Buy an item at the reserved price")
-            print("cancel    (c) <rq> - Cancel the reservation for an item")
-            print("help      (h) - Show this help message")
-            print("quit      (q) - Exit the client\n")
+        with out_lock:
+            print("\n=== Commands ===")
+            if not registered:
+                print("register  (r) - Register with the server")
+            else:
+                print("deregister(d) - Deregister from the server")
+                print("search    (s) <item_name> <description> <max_price> - Search for an item")
+                print("offer     (o) <rq> <item_name> <price> - Offer an item in response to a search request")
+                print("accept    (a) <rq> - Accept the negotiated price offered by the buyer")
+                print("refuse    (f) <rq> - Refuse the negotiated price offered by the buyer")
+                print("buy       (b) <rq> - Buy an item at the reserved price")
+                print("sell      (y) <rq> - Sell an item at the reserved price")
+                print("cancel    (c) <rq> - Cancel the reservation for an item")
+                print("help      (h) - Show this help message")
+                print("quit      (q) - Exit the client\n")
 
     def listen_for_messages():
         """Continuously listen for incoming messages from the server."""
-        nonlocal c_socket, registered, exiting
-
-        while not exiting:
+        while True:
             response, server_address = c_socket.recvfrom(buffer_size)
             response = response.decode()
             print(f"\nReceived message from server: {response}\nEnter command:")
@@ -61,7 +61,6 @@ def start_client():
 
             command = parts[0]
 
-            # Handle SEARCH message
             if command == "SEARCH":
                 rq = parts[1]
                 item_name = parts[2]
@@ -69,7 +68,6 @@ def start_client():
                 print(f"\nServer is searching for: {item_name} (Description: {description})")
                 pending_search_requests[rq] = (item_name, description)
 
-            # Handle NEGOTIATE message
             elif command == "NEGOTIATE":
                 rq = parts[1]
                 item_name = parts[2]
@@ -77,7 +75,6 @@ def start_client():
                 print(f"\nNegotiation request received for {item_name} with max price {max_price}")
                 pending_negotiations[rq] = (item_name, max_price)
 
-            # Handle FOUND message
             elif command == "FOUND":
                 rq = parts[1]
                 item_name = parts[2]
@@ -86,24 +83,18 @@ def start_client():
                     f"\nFOUND: The item '{item_name}' is available at price {price}. You may proceed with the purchase.")
                 pending_reservations[rq] = (item_name, price)
 
-            # Handle NOT_FOUND message
             elif command == "NOT_FOUND":
                 rq = parts[1]
                 item_name = parts[2]
                 max_price = parts[3]
                 print(f"\nNOT_FOUND: The item '{item_name}' is not available at the max price {max_price}.")
 
-            # Handle RESERVE message
             elif command == "RESERVE":
                 rq = parts[1]
                 item_name = parts[2]
                 price = parts[3]
                 print(f"\nRESERVE: You have reserved the item '{item_name}' at price {price}. Awaiting buyer's action.")
                 pending_reservations[rq] = (item_name, price)
-
-            elif command == "DE-REGISTERED":
-                registered = False
-                print(f"\nDE-REGISTERED: You have been deregistered from the server.")
 
     def start_tcp_listener():
         """Start a TCP server to handle incoming messages from the server."""
@@ -112,15 +103,17 @@ def start_client():
             tcp_socket.listen(5)
             print(f"TCP listener started on {client_ip}:{client_tcp_port}")
 
-            while not exiting:
+            while True:
                 conn, addr = tcp_socket.accept()
                 threading.Thread(target=handle_tcp_transaction, args=(conn,), daemon=True).start()
 
     def handle_tcp_transaction(conn):
-        """Handle incoming TCP messages like INFORM_Req."""
+        """Handle incoming TCP messages."""
         try:
             message = conn.recv(buffer_size).decode()
             if message.startswith("INFORM_Req"):
+
+                transaction_flag.set()
                 # Parse the INFORM_Req message
                 parts = message.split()
                 rq = parts[1]
@@ -128,24 +121,39 @@ def start_client():
                 price = parts[3]
 
                 print(f"\nTransaction request received for {item_name} at {price}.")
+
+                # Collect all required transaction information
+                print("Enter transaction details:")
                 cc_number = input(" - Credit card number: ").strip()
-                print(cc_number)
+
                 cc_expiry = input(" - Expiry date (MM/YY or MMYY): ").strip()
-                print(cc_expiry)
+                if len(cc_expiry) == 4 and cc_expiry.isdigit():
+                    cc_expiry = f"{cc_expiry[:2]}/{cc_expiry[2:]}"  # Normalize MMYY to MM/YY
+
                 address = input(" - Address: ").strip()
-                print(address)
 
                 # Send INFORM_Res response
                 response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_expiry} {address}"
                 conn.sendall(response.encode())
                 print("Transaction information sent to the server.")
+
+                transaction_flag.clear()
+            elif message.startswith("Shipping_Info"):
+
+                parts = message.split()
+                item_name = parts[2]
+                address = parts[3]
+
+                print(f"\nShipping address for the buyer is: {address}")
+
         except Exception as e:
             print(f"Error handling TCP transaction: {e}")
         finally:
             conn.close()
 
     def register():
-        nonlocal client_name, client_udp_port, client_tcp_port, c_socket, registered
+        nonlocal client_name, client_udp_port, client_tcp_port, c_socket
+        global registered
 
         while not registered:
             print("\n=== Registration ===")
@@ -189,7 +197,7 @@ def start_client():
                 continue  # Restart the registration loop
 
     def deregister():
-        nonlocal registered
+        global registered
         if not client_name:
             print("You must register before deregistering.")
             return
@@ -197,15 +205,10 @@ def start_client():
         message = f"DE-REGISTER {rq} {client_name}"
         c_socket.sendto(message.encode(), (server_ip, server_port))
 
-    def quit():
-        nonlocal exiting
-
-        if registered: deregister()
-        while registered:
-            sleep(1)
-
-        exiting = True
-        print("Exiting client.")
+        response, server_address = c_socket.recvfrom(buffer_size)
+        print(f"Server response: {response.decode()}")
+        if "DE-REGISTERED" in response.decode():
+            registered = False
 
     def looking_for():
         if not client_name:
@@ -222,7 +225,6 @@ def start_client():
         print("Sent item search request to server.")
 
     def offer_item():
-        """Allow the user to respond to a SEARCH request with an OFFER."""
         if not pending_search_requests:
             print("No pending search requests to offer.")
             return
@@ -242,7 +244,6 @@ def start_client():
         del pending_search_requests[rq]
 
     def accept_negotiation():
-        """Allow the user to accept a negotiation request from the server."""
         if not pending_negotiations:
             print("No pending negotiations to accept.")
             return
@@ -260,7 +261,6 @@ def start_client():
         del pending_negotiations[rq]
 
     def refuse_negotiation():
-        """Allow the user to refuse a negotiation request from the server."""
         if not pending_negotiations:
             print("No pending negotiations to refuse.")
             return
@@ -278,7 +278,7 @@ def start_client():
         del pending_negotiations[rq]
 
     def buy_item():
-        """Allow the buyer to confirm the purchase of a reserved item."""
+        """buyer can confirm the buy"""
         if not pending_reservations:
             print("No pending reservations to buy.")
             return
@@ -293,10 +293,15 @@ def start_client():
         c_socket.sendto(buy_message.encode(), (server_ip, server_port))
         print(f"Sent BUY for {item_name} at price {price}")
 
+        transaction_flag.set()
+        time.sleep(10)
+
         del pending_reservations[rq]
 
+    def sell_item():
+        pass
+
     def cancel_reservation():
-        """Allow the buyer to cancel a reservation."""
         if not pending_reservations:
             print("No pending reservations to cancel.")
             return
@@ -314,10 +319,6 @@ def start_client():
         del pending_reservations[rq]
 
     def handle_command(command, registered):
-        if command.startswith("quit") or command.startswith("q"):
-            quit()
-            return False
-
         if not registered and command in ["register", "r"]:
             register()
             return True
@@ -328,37 +329,46 @@ def start_client():
             if command in ["deregister", "d"]:
                 deregister()
                 return False
-            if command.startswith("search") or command.startswith("s"):
+            elif command in ["search", "s"]:
                 looking_for()
-            if command.startswith("offer") or command.startswith("o"):
+            elif command in ["offer", "o"]:
                 offer_item()
-            if command.startswith("accept") or command.startswith("a"):
+            elif command in ["accept", "a"]:
                 accept_negotiation()
-            if command.startswith("refuse") or command.startswith("f"):
+            elif command in ["refuse", "f"]:
                 refuse_negotiation()
-            if command.startswith("buy") or command.startswith("b"):
+            elif command in ["buy", "b"]:
                 buy_item()
-            if command.startswith("cancel") or command.startswith("c"):
+            elif command in ["sell", "y"]:
+                sell_item()
+            elif command.startswith("cancel") or command.startswith("c"):
                 cancel_reservation()
-            if command == "help" or command == "h":
+            elif command == "help" or command == "h":
                 show_menu()
-            else:
-                print("Unknown command. Type 'help' or 'h' for available commands.")
+            elif command == "quit" or command == "q":
+                print("Exiting client.")
+                return False
+
             return registered
 
-    while not exiting:
-        show_menu(registered)
-        command = input("Enter command: ").strip().lower()
-        registered = handle_command(command, registered)
+    def main_loop(busy):
+        global registered
 
+        while True:
+            if not busy.is_set():
+                show_menu(registered)
 
-    # Close all active threads for graceful termination
-    for thread in threading.enumerate():
-        if thread is not threading.main_thread():
-            thread.join(timeout=1)
+                with input_lock:
+                    command = input("Enter command: ").strip().lower()
+                    registered = handle_command(command, registered)
+                    if command == "quit" or command == "q":
+                        print("Exiting client.")
+                        break
 
-    if c_socket:
-        c_socket.close()
+        # if c_socket:
+        #     c_socket.close()
+
+    threading.Thread(target=main_loop, args=[transaction_flag, ], daemon=False).start()
 
 
 if __name__ == "__main__":
