@@ -110,7 +110,7 @@ def start_server():
     def check_offers_after_timeout(rq):
         """Evaluate offers after waiting for 5 minutes or receiving all expected offers."""
         global udp_socket
-        timeout = 60
+        timeout = 120
         start_time = time.time()
 
         while time.time() - start_time < timeout:
