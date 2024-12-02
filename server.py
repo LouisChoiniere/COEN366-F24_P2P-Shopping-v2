@@ -1,493 +1,375 @@
 import socket
+import random
 import threading
 import time
-import json
-import os
-import argparse
+
+input_lock = threading.Lock()
+out_lock = threading.Lock()
 
 
-class Client:
-    def __init__(self, name, ip, udp_port, tcp_port):
-        self.name = name
-        self.ip = ip
-        self.udp_port = udp_port
-        self.tcp_port = tcp_port
-
-    def to_dict(self):
-        """Convert client data from an object to a dictionary (Used to save data to file)"""
-        return {
-            "name": self.name,
-            "ip": self.ip,
-            "udp_port": self.udp_port,
-            "tcp_port": self.tcp_port,
-        }
-
-    def from_dict(data):
-        """Convert client data from a dictionary to a Client object (Used to load data from file)"""
-        return Client(data["name"], data["ip"], data["udp_port"], data["tcp_port"])
+def generate_rq():
+    return f"RQ{random.randint(1000, 9999)}"
 
 
-def start_server():
-    def parse_arguments():
-        parser = argparse.ArgumentParser(description="P2P Shopping Server")
-        parser.add_argument("--server_ip", type=str, default="0.0.0.0", help="Server IP address")
-        parser.add_argument("--udp_port", type=int, default=5000, help="UDP port number")
-        parser.add_argument("--tcp_port", type=int, default=5001, help="TCP port number")
-        parser.add_argument("--buffer_size", type=int, default=1024, help="Buffer size for socket communication")
-        parser.add_argument("--data_file", type=str, default="server_data.json", help="File to store server data")
-        return parser.parse_args()
+def start_client():
+    global registered
+    with input_lock:
 
-    args = parse_arguments()
+        server_ip = input("Enter the server IP address: ")
+        server_port = 5000
+        buffer_size = 1024
 
-    server_ip = args.server_ip
-    udp_port = args.udp_port
-    tcp_port = args.tcp_port
-    buffer_size = args.buffer_size
-    data_file = args.data_file
+        client_ip = socket.gethostbyname(socket.gethostname())
 
-    all_clients = {}
-    active_searches = {}
-    reservations = {}
+        client_name = ""
+        client_udp_port = ""
+        client_tcp_port = ""
+        c_socket = None
+        pending_search_requests = {}
+        pending_negotiations = {}
+        pending_reservations = {}
+        registered = False
+        transaction_flag = threading.Event()
 
-    def load_data():
-        if os.path.exists(data_file) and os.path.getsize(data_file) > 0:
-            with open(data_file, "r") as file:
-                data = json.load(file)
-                # Load clients
-                for client_name, client_data in data.get("all_clients", {}).items():
-                    all_clients[client_name] = Client.from_dict(client_data)
-                # Load active searches
-                global active_searches
-                active_searches = data.get("active_searches", {})
-                # Load reservations
-                global reservations
-                reservations = data.get("reservations", {})
-            print("Data loaded from file.")
-        else:
-            print("No previous data file found or file is empty. Starting fresh.")
-
-    def save_data():
-        data = {
-            "all_clients": {name: client.to_dict() for name, client in all_clients.items()},
-            "active_searches": active_searches,
-            "reservations": reservations,
-        }
-        with open(data_file, "w") as file:
-            json.dump(data, file, indent=4)
-        print("Data saved to file.")
-
-    def log_action(action):
-        """Log server actions to a log file."""
-        with open("server.log", "a") as log_file:
-            log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {action}\n")
-
-    def broadcast_search(rq, requester_name, item_name, description, max_price):
-        """Send SEARCH message to all clients except the requester."""
-        global udp_socket
-        num_sellers = 0
-        for client_key, client in all_clients.items():
-            if client.name != requester_name:
-                search_message = f"SEARCH {rq} {item_name} {description}"
-                udp_socket.sendto(search_message.encode(), (client.ip, int(client.udp_port)))
-                print(f"Sent SEARCH to {client.name} at {client.ip}:{client.udp_port}")
-                num_sellers += 1
-
-        active_searches[rq] = {
-            "requester_name": requester_name,
-            "item_name": item_name,
-            "max_price": int(max_price),
-            "offers": [],
-            "expected_offers": num_sellers
-        }
-
-        threading.Thread(target=check_offers_after_timeout, args=(rq,), daemon=True).start()
-        log_action(f"SEARCH broadcasted for {item_name} by {requester_name}")
-        save_data()
-
-    def check_offers_after_timeout(rq):
-        """Evaluate offers after waiting for 5 minutes or receiving all expected offers."""
-        global udp_socket
-        timeout = 60
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            if rq not in active_searches:
-                return  # The request has already been processed
-
-            if len(active_searches[rq]["offers"]) >= active_searches[rq]["expected_offers"]:
-                break
-
-            time.sleep(1)
-
-        if rq in active_searches:
-            process_offers(rq)
-
-    def process_offers(rq):
-        """Process offers for a request after all responses or timeout."""
-        global udp_socket, reservations
-        if rq not in active_searches:
-            print(f"ERROR: {rq} already removed from active_searches in process_offers.")
-            return
-
-        search_info = active_searches[rq]
-        buyer_name = search_info["requester_name"]
-        max_price = search_info["max_price"]
-        offers = search_info["offers"]
-
-        # Filter offers that are within the max price
-        valid_offers = [offer for offer in offers if offer[2] <= max_price]
-
-        if valid_offers:
-            # Find the offer with the lowest price
-            lowest_offer = min(valid_offers, key=lambda x: x[2])
-            seller_name, item_name, price = lowest_offer
-
-            # Send RESERVE to seller and FOUND to buyer
-            seller_client = all_clients[seller_name]
-            reserve_message = f"RESERVE {rq} {item_name} {price}"
-            udp_socket.sendto(reserve_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
-            print(f"Sent RESERVE to {seller_name} for item {item_name} at price {price}")
-
-            # Notify the buyer about the availability
-            buyer_client = all_clients[buyer_name]
-            found_message = f"FOUND {rq} {item_name} {price}"
-            udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
-            print(f"Sent FOUND to {buyer_name} for item {item_name} at price {price}")
-            # Store the reservation
-            reservations[rq] = {
-                "seller_name": seller_name,
-                "item_name": item_name,
-                "price": price,
-            }
-            # Update the active search status instead of deleting
-            active_searches[rq]["status"] = "RESERVED"
-            active_searches[rq]["reserved_seller"] = seller_name
-            active_searches[rq]["reserved_price"] = price
-
-        else:
-            # If no valid offers, attempt negotiation
-            above_max_offers = [offer for offer in offers if offer[2] > max_price]
-            if above_max_offers:
-                lowest_above_max_offer = min(above_max_offers, key=lambda x: x[2])
-                seller_name, item_name, lowest_price = lowest_above_max_offer
-
-                seller_client = all_clients[seller_name]
-                negotiate_message = f"NEGOTIATE {rq} {item_name} {max_price}"
-                udp_socket.sendto(negotiate_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
-                print(f"Sent NEGOTIATE to {seller_name} for item {item_name} at max price {max_price}")
-
+    def show_menu(registered):
+        with out_lock:
+            print("\n=== Commands ===")
+            if not registered:
+                print("register  (r) - Register with the server")
             else:
-                print(f"No valid offers found for {rq}. Cleaning up.")
-                del active_searches[rq]  # Clean up only when no negotiation is possible
+                print("deregister(d) - Deregister from the server")
+                print("search    (s) <item_name> <description> <max_price> - Search for an item")
+                print("offer     (o) <rq> <item_name> <price> - Offer an item in response to a search request")
+                print("accept    (a) <rq> - Accept the negotiated price offered by the buyer")
+                print("refuse    (f) <rq> - Refuse the negotiated price offered by the buyer")
+                print("buy       (b) <rq> - Buy an item at the reserved price")
+                print("sell      (y) <rq> - Sell an item at the reserved price")
+                print("cancel    (c) <rq> - Cancel the reservation for an item")
+                print("help      (h) - Show this help message")
+                print("quit      (q) - Exit the client\n")
 
-    def process_offer(rq, offer_name, item_name, price):
-        """Process an OFFER message from a client."""
-        global udp_socket
-        if rq in active_searches:
-            search_info = active_searches[rq]
-            search_info["offers"].append((offer_name, item_name, int(price)))
-            print(f"Received OFFER from {offer_name} for {item_name} at price {price}")
-        else:
-            print(f"ERROR: Request {rq} not found in active_searches during OFFER processing.")
+    def listen_for_messages():
+        """Continuously listen for incoming messages from the server."""
+        while True:
+            response, server_address = c_socket.recvfrom(buffer_size)
+            response = response.decode()
+            print(f"\nReceived message from server: {response}\nEnter command:")
 
-    def process_accept(rq, seller_name, item_name, max_price):
-        """Process an ACCEPT message from a seller."""
-        global reservations
-        if rq in active_searches:
-            search_info = active_searches[rq]
-            buyer_name = search_info["requester_name"]
+            parts = response.split()
+            if not parts:
+                continue
 
-            if buyer_name in all_clients:
-                buyer_client = all_clients[buyer_name]
+            command = parts[0]
 
-                # Send FOUND message to the buyer to confirm availability
-                found_message = f"FOUND {rq} {item_name} {max_price}"
-                udp_socket.sendto(found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
-                print(f"Sent FOUND to {buyer_name} for item {item_name} at price {max_price}")
+            if command == "SEARCH":
+                rq = parts[1]
+                item_name = parts[2]
+                description = parts[3]
+                print(f"\nServer is searching for: {item_name} (Description: {description})")
+                pending_search_requests[rq] = (item_name, description)
 
-                # Store the reservation
-                reservations[rq] = {
-                    "seller_name": seller_name,
-                    "item_name": item_name,
-                    "price": max_price,
-                }
-                print(f"Reservation created for {rq}: {reservations[rq]}")
+            elif command == "NEGOTIATE":
+                rq = parts[1]
+                item_name = parts[2]
+                max_price = parts[3]
+                print(f"\nNegotiation request received for {item_name} with max price {max_price}")
+                pending_negotiations[rq] = (item_name, max_price)
 
-                # Log reservation creation
-                log_action(f"Reservation created: {reservations[rq]}")
+            elif command == "FOUND":
+                rq = parts[1]
+                item_name = parts[2]
+                price = parts[3]
+                print(
+                    f"\nFOUND: The item '{item_name}' is available at price {price}. You may proceed with the purchase.")
+                pending_reservations[rq] = (item_name, price)
 
-                del active_searches[rq]
-            else:
-                print(f"ERROR: Buyer {buyer_name} not found in all_clients.")
-        else:
-            print(f"ERROR: Request {rq} not found in active_searches during ACCEPT.")
+            elif command == "NOT_FOUND":
+                rq = parts[1]
+                item_name = parts[2]
+                max_price = parts[3]
+                print(f"\nNOT_FOUND: The item '{item_name}' is not available at the max price {max_price}.")
 
-    def process_refuse(rq, seller_name, item_name, max_price):
-        """Process a REFUSE message from a seller."""
-        global udp_socket
-        if rq in active_searches:
-            search_info = active_searches[rq]
-            buyer_name = search_info["requester_name"]
+            elif command == "RESERVE":
+                rq = parts[1]
+                item_name = parts[2]
+                price = parts[3]
+                print(f"\nRESERVE: You have reserved the item '{item_name}' at price {price}. Awaiting buyer's action.")
+                pending_reservations[rq] = (item_name, price)
 
-            if buyer_name in all_clients:
-                buyer_client = all_clients[buyer_name]
-
-                # Send NOT_FOUND message to the buyer
-                not_found_message = f"NOT_FOUND {rq} {item_name} {max_price}"
-                udp_socket.sendto(not_found_message.encode(), (buyer_client.ip, int(buyer_client.udp_port)))
-                print(f"Sent NOT_FOUND to {buyer_name} for item {item_name} at max price {max_price}")
-
-                del active_searches[rq]
-            else:
-                print(f"ERROR: Buyer {buyer_name} not found in all_clients.")
-        else:
-            print(f"ERROR: Request {rq} not found in active_searches during REFUSE.")
-
-    def process_cancel(rq, buyer_name):
-        """Process a CANCEL message from a buyer."""
-        global udp_socket
-        if rq in active_searches:
-            # If the request exists in active_searches, proceed with cancellation
-            search_info = active_searches[rq]
-            seller_name = search_info.get("reserved_seller")
-
-            if seller_name:
-                # Send CANCEL message to the seller
-                cancel_message = f"CANCEL {rq} {search_info['item_name']} {search_info.get('reserved_price', 'N/A')}"
-                seller_client = all_clients[seller_name]
-                udp_socket.sendto(cancel_message.encode(), (seller_client.ip, int(seller_client.udp_port)))
-                print(f"Sent CANCEL to {seller_name} for item {search_info['item_name']}")
-
-            # Remove the reservation from active_searches
-            del active_searches[rq]
-            print(f"Request {rq} has been canceled and removed from active_searches.")
-        else:
-            # If the request doesn't exist in active_searches, log a message but don't raise an error
-            print(f"Request {rq} not found in active_searches. It might have already been processed or canceled.")
-
-    def process_buy(rq, buyer_name):
-        """Process a BUY message and handle the transaction."""
-        global reservations
-
-        # Log the reservation state before lookup
-        log_action(f"Current reservations: {reservations}")
-        print(f"Looking up reservation for RQ: {rq}")
-
-        if rq not in reservations:
-            log_action(f"Reservation {rq} not found.")
-            print(f"Reservation {rq} not found.")
-            return
-
-        transaction_info = reservations[rq]
-        log_action(f"Reservation found: {transaction_info}")
-
-        seller_name = transaction_info["seller_name"]
-        item_name = transaction_info["item_name"]
-        price = transaction_info["price"]
-
-        # Ensure both buyer and seller exist
-        if buyer_name not in all_clients or seller_name not in all_clients:
-            print("Buyer or seller not registered.")
-            return
-
-        buyer = all_clients[buyer_name]
-        seller = all_clients[seller_name]
-
-        # Prepare TCP connections
-        buyer_conn = (buyer.ip, int(buyer.tcp_port))
-        seller_conn = (seller.ip, int(seller.tcp_port))
-        inform_message = f"INFORM_Req {rq} {item_name} {price}"
-
-        try:
-            # Send INFORM_Req to buyer and seller
-            print(f"Sending INFORM_Req to buyer ({buyer.name}) and seller ({seller.name})")
-            buyer_response = send_and_receive_tcp(buyer_conn, inform_message)
-            seller_response = send_and_receive_tcp(seller_conn, inform_message)
-
-            # If both responses are received, simulate transaction
-            if buyer_response and seller_response:
-                # Calculate transaction fee and seller's share
-                transaction_fee = float(price) * 0.1
-                seller_share = float(price) * 0.9
-
-                # Log transaction details
-                print(f"Transaction successful for {item_name} at price {price}")
-                log_action(f"Transaction completed for {item_name} at {price}.")
-                log_action(f"Transaction Fee: {transaction_fee:.2f}, Seller's Share: {seller_share:.2f}")
-
-                # Simulate charging buyer's credit card and crediting seller
-                print(f"Charging buyer's credit card: {price}")
-                print(f"Crediting seller's account: {seller_share:.2f} (90% of the price)")
-                log_action(f"Buyer charged: {price}, Seller credited: {seller_share:.2f}, Fee collected: {transaction_fee:.2f}")
-
-                # Remove the reservation
-                del reservations[rq]
-            else:
-                # Handle transaction failure
-                print(f"Transaction failed for {item_name}. Sending CANCEL messages.")
-                cancel_message = f"CANCEL {rq} Transaction failed"
-                send_tcp_message(buyer_conn, cancel_message)
-                send_tcp_message(seller_conn, cancel_message)
-
-        except Exception as e:
-            print(f"Error during transaction: {e}")
-            cancel_message = f"CANCEL {rq} Transaction error"
-            send_tcp_message(buyer_conn, cancel_message)
-            send_tcp_message(seller_conn, cancel_message)
-
-
-
-    def send_and_receive_tcp(connection, message):
-        """Send a message over TCP and wait for a response."""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
-                tcp_socket.settimeout(300)  # Set a timeout
-                tcp_socket.connect(connection)
-                tcp_socket.sendall(message.encode())
-                print(f"Sent message: {message}")
-
-                response = tcp_socket.recv(1024).decode()  # Receive response
-                print(f"Received response: {response}")
-                return response  # Return the response
-
-        except socket.timeout:
-            print(f"Error: TCP connection to {connection} timed out.")
-        except ConnectionRefusedError:
-            print(f"Error: Connection to {connection} was refused.")
-        except Exception as e:
-            print(f"Error in TCP communication: {e}")
-        return None  # Return None in case of an error
-
-    def send_tcp_message(connection, message):
-        """Send a message over TCP without waiting for a response."""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
-                tcp_socket.settimeout(5)  # Set a timeout of 5 seconds
-                tcp_socket.connect(connection)
-                tcp_socket.sendall(message.encode())
-                print(f"Sent message: {message}")
-        except socket.timeout:
-            print(f"Error: TCP connection to {connection} timed out.")
-        except ConnectionRefusedError:
-            print(f"Error: Connection to {connection} was refused.")
-        except Exception as e:
-            print(f"Error sending TCP message: {e}")
-
-    def handle_message(message, client_address, type):
-        global udp_socket
-        parts = message.split()
-        command = parts[0]
-        rq = parts[1]
-
-        if command == "REGISTER":
-            name, ip, udp_port, tcp_port = parts[2:]
-            if name in all_clients:
-                response = f"REGISTER-DENIED {rq} Name already registered"
-            else:
-                all_clients[name] = Client(name, ip, udp_port, tcp_port)
-                response = f"REGISTERED {rq}"
-                log_action(f"Client {name} registered with IP {ip}, UDP Port {udp_port}, TCP Port {tcp_port}")
-                save_data()
-            udp_socket.sendto(response.encode(), client_address)
-
-        elif command == "DE-REGISTER":
-            name = parts[2]
-            if name in all_clients:
-                del all_clients[name]
-                response = f"DE-REGISTERED {rq}"
-                log_action(f"Client {name} de-registered")
-                save_data()
-            else:
-                response = f"DE-REGISTER-FAILED {rq} Not registered"
-            udp_socket.sendto(response.encode(), client_address)
-
-        elif command == "LOOKING_FOR":
-            requester_name = parts[2]
-            item_name = parts[3]
-            description = parts[4]
-            max_price = parts[5]
-
-            print(f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
-            log_action(
-                f"{requester_name} is looking for {item_name} (Description: {description}, Max Price: {max_price})")
-            broadcast_search(rq, requester_name, item_name, description, max_price)
-            response = f"LOOKING_FOR_ACK {rq} SEARCH request broadcasted"
-            udp_socket.sendto(response.encode(), client_address)
-
-        elif command == "OFFER":
-            offer_name = parts[2]
-            item_name = parts[3]
-            price = parts[4]
-            print(f"Received OFFER from {offer_name} for {item_name} at price {price}")
-            log_action(f"Received OFFER from {offer_name} for {item_name} at price {price}")
-            process_offer(rq, offer_name, item_name, price)
-
-        elif command == "ACCEPT":
-            seller_name = parts[2]
-            item_name = parts[3]
-            max_price = parts[4]
-            print(f"Received ACCEPT from {seller_name} for item {item_name} at max price {max_price}")
-            log_action(f"Received ACCEPT from {seller_name} for item {item_name} at max price {max_price}")
-            process_accept(rq, seller_name, item_name, max_price)
-
-        elif command == "REFUSE":
-            seller_name = parts[2]
-            item_name = parts[3]
-            max_price = parts[4]
-            print(f"Received REFUSE from {seller_name} for item {item_name} at max price {max_price}")
-            log_action(f"Received REFUSE from {seller_name} for item {item_name} at max price {max_price}")
-            process_refuse(rq, seller_name, item_name, max_price)
-
-        elif command == "CANCEL":
-            buyer_name = parts[2]
-            print(f"Received CANCEL from {buyer_name} for request {rq}")
-            log_action(f"Received Cancel from {buyer_name}")
-            process_cancel(rq, buyer_name)
-
-        elif command == "BUY":
-            buyer_name = parts[2]
-            print(f"Received BUY from {buyer_name} for request {rq}")
-            log_action(f"Received Buy from {buyer_name}")
-            process_buy(rq, buyer_name)
-
-    def TCP_listener(port):
-        global tcp_socket
+    def start_tcp_listener():
+        """Start a TCP server to handle incoming messages from the server."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
-            tcp_socket.bind((server_ip, port))
-            tcp_socket.listen(10)
-            print(f"TCP socket started {server_ip}:{port}")
+            tcp_socket.bind((client_ip, int(client_tcp_port)))
+            tcp_socket.listen(5)
+            print(f"TCP listener started on {client_ip}:{client_tcp_port}")
 
             while True:
-                conn, client_address = tcp_socket.accept()
-                with conn:
-                    message = conn.recv(buffer_size)
-                    print(f"Received TCP message from {client_address}: {message.decode()}")
-                    threading.Thread(target=handle_message, args=(message.decode(), client_address, 'TCP'),
-                                     daemon=True).start()
-                    load_data()
+                conn, addr = tcp_socket.accept()
+                threading.Thread(target=handle_tcp_transaction, args=(conn,), daemon=True).start()
 
-    def UDP_listener(port):
-        global udp_socket
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
-            udp_socket.bind((server_ip, port))
-            print(f"UDP socket started {server_ip}:{port}")
+    def handle_tcp_transaction(conn):
+        """Handle incoming TCP messages."""
+        try:
+            message = conn.recv(buffer_size).decode()
+            if message.startswith("INFORM_Req"):
 
-            while True:
-                message, client_address = udp_socket.recvfrom(buffer_size)
-                print(f"Received UDP message from {client_address}: {message.decode()}")
+                transaction_flag.set()
+                # Parse the INFORM_Req message
+                parts = message.split()
+                rq = parts[1]
+                item_name = parts[2]
+                price = parts[3]
 
-                threading.Thread(target=handle_message, args=(message.decode(), client_address, 'UDP'),
-                                 daemon=True).start()
+                print(f"\nTransaction request received for {item_name} at {price}.")
 
-    load_data()
-    print(f"Starting server with ip: {server_ip} TCP port: {tcp_port} UDP port: {udp_port} ")
+                # Collect all required transaction information
+                print("Enter transaction details:")
+                cc_number = input(" - Credit card number: ").strip()
 
-    threading.Thread(target=TCP_listener, args=(tcp_port,), daemon=True).start()
-    threading.Thread(target=UDP_listener, args=(udp_port,), daemon=True).start()
+                cc_expiry = input(" - Expiry date (MM/YY or MMYY): ").strip()
+                if len(cc_expiry) == 4 and cc_expiry.isdigit():
+                    cc_expiry = f"{cc_expiry[:2]}/{cc_expiry[2:]}"  # Normalize MMYY to MM/YY
 
-    while True:
-        pass  # Prevent the main program from exiting
+                address = input(" - Address: ").strip()
+
+                # Send INFORM_Res response
+                response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_expiry} {address}"
+                conn.sendall(response.encode())
+                print("Transaction information sent to the server.")
+
+                transaction_flag.clear()
+            elif message.startswith("Shipping_Info"):
+
+                parts = message.split()
+                item_name = parts[2]
+                address = parts[3]
+
+                print(f"\nShipping address for the buyer is: {address}")
+
+        except Exception as e:
+            print(f"Error handling TCP transaction: {e}")
+        finally:
+            conn.close()
+
+    def register():
+        nonlocal client_name, client_udp_port, client_tcp_port, c_socket
+        global registered
+
+        while not registered:
+            print("\n=== Registration ===")
+            client_name = input("Enter your name: ")
+
+            client_udp_port = random.randint(5500, 9999)
+            client_tcp_port = random.randint(5500, 9999)
+            print(f"Auto-generated UDP port: {client_udp_port}")
+            print(f"Auto-generated TCP port: {client_tcp_port}")
+            rq = generate_rq()
+
+            # Initialize the UDP socket
+            c_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            c_socket.bind((client_ip, int(client_udp_port)))  # Bind to the provided UDP port
+
+            # Send registration message to server
+            message = f"REGISTER {rq} {client_name} {client_ip} {client_udp_port} {client_tcp_port}"
+            c_socket.sendto(message.encode(), (server_ip, server_port))
+
+            # Receive response from the server
+            response, server_address = c_socket.recvfrom(buffer_size)
+            response_message = response.decode()
+            print(f"Server response: {response_message}")
+
+            if "REGISTERED" in response_message:
+                # Registration successful
+                registered = True
+                print("Registration successful.")
+                # Start the listener threads
+                listener_thread = threading.Thread(target=listen_for_messages, daemon=True)
+                listener_thread.start()
+
+                tcp_listener_thread = threading.Thread(target=start_tcp_listener, daemon=True)
+                tcp_listener_thread.start()
+                return True  # Exit loop and indicate success
+            elif "REGISTER-DENIED" in response_message:
+                # Registration denied
+                print("Registration denied. User already exists. Please try again.")
+                print("Hint: Choose a unique name or different port numbers.")
+                c_socket.close()  # Close the current socket to allow re-registration
+                continue  # Restart the registration loop
+
+    def deregister():
+        global registered
+        if not client_name:
+            print("You must register before deregistering.")
+            return
+        rq = generate_rq()
+        message = f"DE-REGISTER {rq} {client_name}"
+        c_socket.sendto(message.encode(), (server_ip, server_port))
+
+        response, server_address = c_socket.recvfrom(buffer_size)
+        print(f"Server response: {response.decode()}")
+        if "DE-REGISTERED" in response.decode():
+            registered = False
+
+    def looking_for():
+        if not client_name:
+            print("You must register before searching for items.")
+            return
+
+        item_name = input("Enter item name: ")
+        description = input("Enter item description: ")
+        max_price = input("Enter maximum price: ")
+        rq = generate_rq()
+
+        message = f"LOOKING_FOR {rq} {client_name} {item_name} {description} {max_price}"
+        c_socket.sendto(message.encode(), (server_ip, server_port))
+        print("Sent item search request to server.")
+
+    def offer_item():
+        if not pending_search_requests:
+            print("No pending search requests to offer.")
+            return
+
+        rq = input("Enter the request number (RQ#) of the search request to respond to: ")
+        if rq not in pending_search_requests:
+            print("Invalid request number.")
+            return
+
+        item_name, description = pending_search_requests[rq]
+        price = input(f"Enter your offer price for {item_name} (Description: {description}): ")
+
+        offer_message = f"OFFER {rq} {client_name} {item_name} {price}"
+        c_socket.sendto(offer_message.encode(), (server_ip, server_port))
+        print(f"Sent OFFER for {item_name} with price {price}")
+
+        del pending_search_requests[rq]
+
+    def accept_negotiation():
+        if not pending_negotiations:
+            print("No pending negotiations to accept.")
+            return
+
+        rq = input("Enter the request number (RQ#) of the negotiation to accept: ")
+        if rq not in pending_negotiations:
+            print("Invalid request number.")
+            return
+
+        item_name, max_price = pending_negotiations[rq]
+        accept_message = f"ACCEPT {rq} {client_name} {item_name} {max_price}"
+        c_socket.sendto(accept_message.encode(), (server_ip, server_port))
+        print(f"Sent ACCEPT for {item_name} at negotiated price {max_price}")
+
+        del pending_negotiations[rq]
+
+    def refuse_negotiation():
+        if not pending_negotiations:
+            print("No pending negotiations to refuse.")
+            return
+
+        rq = input("Enter the request number (RQ#) of the negotiation to refuse: ")
+        if rq not in pending_negotiations:
+            print("Invalid request number.")
+            return
+
+        item_name, max_price = pending_negotiations[rq]
+        refuse_message = f"REFUSE {rq} {client_name} {item_name} {max_price}"
+        c_socket.sendto(refuse_message.encode(), (server_ip, server_port))
+        print(f"Sent REFUSE for {item_name} at negotiated price {max_price}")
+
+        del pending_negotiations[rq]
+
+    def buy_item():
+        """buyer can confirm the buy"""
+        if not pending_reservations:
+            print("No pending reservations to buy.")
+            return
+
+        rq = input("Enter the request number (RQ#) of the reservation to buy: ")
+        if rq not in pending_reservations:
+            print("Invalid request number.")
+            return
+
+        item_name, price = pending_reservations[rq]
+        buy_message = f"BUY {rq} {client_name} {item_name} {price}"
+        c_socket.sendto(buy_message.encode(), (server_ip, server_port))
+        print(f"Sent BUY for {item_name} at price {price}")
+
+        transaction_flag.set()
+        time.sleep(10)
+
+        del pending_reservations[rq]
+
+    def sell_item():
+        pass
+
+    def cancel_reservation():
+        if not pending_reservations:
+            print("No pending reservations to cancel.")
+            return
+
+        rq = input("Enter the request number (RQ#) of the reservation to cancel: ")
+        if rq not in pending_reservations:
+            print("Invalid request number.")
+            return
+
+        item_name, price = pending_reservations[rq]
+        cancel_message = f"CANCEL {rq} {client_name} {item_name} {price}"
+        c_socket.sendto(cancel_message.encode(), (server_ip, server_port))
+        print(f"Sent CANCEL for {item_name} at price {price}")
+
+        del pending_reservations[rq]
+
+    def handle_command(command, registered):
+        if not registered and command in ["register", "r"]:
+            register()
+            return True
+        elif not registered:
+            print("You must register first.")
+            return False
+        else:
+            if command in ["deregister", "d"]:
+                deregister()
+                return False
+            elif command in ["search", "s"]:
+                looking_for()
+            elif command in ["offer", "o"]:
+                offer_item()
+            elif command in ["accept", "a"]:
+                accept_negotiation()
+            elif command in ["refuse", "f"]:
+                refuse_negotiation()
+            elif command in ["buy", "b"]:
+                buy_item()
+            elif command in ["sell", "y"]:
+                sell_item()
+            elif command.startswith("cancel") or command.startswith("c"):
+                cancel_reservation()
+            elif command == "help" or command == "h":
+                show_menu()
+            elif command == "quit" or command == "q":
+                print("Exiting client.")
+                return False
+
+            return registered
+
+    def main_loop(busy):
+        global registered
+
+        while True:
+            if not busy.is_set():
+                show_menu(registered)
+
+                with input_lock:
+                    command = input("Enter command: ").strip().lower()
+                    registered = handle_command(command, registered)
+                    if command == "quit" or command == "q":
+                        print("Exiting client.")
+                        break
+
+        # if c_socket:
+        #     c_socket.close()
+
+    threading.Thread(target=main_loop, args=[transaction_flag, ], daemon=False).start()
 
 
 if __name__ == "__main__":
-    start_server()
+    start_client()
