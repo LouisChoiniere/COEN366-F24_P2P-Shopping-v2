@@ -10,7 +10,6 @@ out_lock = threading.Lock()
 def generate_rq():
     return f"RQ{random.randint(1000, 9999)}"
 
-
 def start_client():
     global registered
     with input_lock:
@@ -135,6 +134,7 @@ def start_client():
                 # Send INFORM_Res response
                 response = f"INFORM_Res {rq} {client_name} {cc_number} {cc_expiry} {address}"
                 conn.sendall(response.encode())
+
                 print("Transaction information sent to the server.")
 
                 transaction_flag.clear()
