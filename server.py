@@ -309,8 +309,8 @@ def start_server():
                 # Randomly decide whether to proceed with the transaction
                 if should_proceed():
                     # Calculate transaction fee and seller's share
-                    transaction_fee = price * 0.1
-                    seller_share = price * 0.9
+                    transaction_fee = float(price) * 0.1
+                    seller_share = float(price) * 0.9
 
                     parts = seller_response.split()
                     cc_number_seller, exp_date_seller, add_seller = parts[3:]
